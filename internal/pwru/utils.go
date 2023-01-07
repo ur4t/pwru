@@ -45,14 +45,13 @@ func getAvailableFilterFunctions() (map[string]struct{}, error) {
 	return availableFuncs, nil
 }
 
-func InitFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool) error {
-
+func InitFuncs() error {
 	type iterator struct {
 		kmod string
 		iter *btf.TypesIterator
 	}
 
-	reg, err := regexp.Compile(pattern)
+	reg, err := regexp.Compile(Flags.FilterFunc)
 	if err != nil {
 		return fmt.Errorf("failed to compile regular expression %v", err)
 	}
@@ -62,8 +61,8 @@ func InitFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool)
 		log.Printf("Failed to retrieve available ftrace functions (is /sys/kernel/debug/tracing mounted?): %s", err)
 	}
 
-	iters := []iterator{{"", spec.Iterate()}}
-	for _, module := range kmods {
+	iters := []iterator{{"", Flags.BtfSpec.Iterate()}}
+	for _, module := range Flags.KMods {
 		path := filepath.Join("/sys/kernel/btf", module)
 		f, err := os.Open(path)
 		if err != nil {
@@ -71,7 +70,7 @@ func InitFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool)
 		}
 		defer f.Close()
 
-		modSpec, err := btf.LoadSplitSpecFromReader(f, spec)
+		modSpec, err := btf.LoadSplitSpecFromReader(f, Flags.BtfSpec)
 		if err != nil {
 			return fmt.Errorf("failed to load %s btf: %v", module, err)
 		}
@@ -87,7 +86,7 @@ func InitFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool)
 
 			fnName := fn.Name
 
-			if pattern != "" && reg.FindString(fnName) != fnName {
+			if Flags.FilterFunc != "" && reg.FindString(fnName) != fnName {
 				continue
 			}
 
@@ -106,7 +105,7 @@ func InitFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool)
 					if strct, ok := ptr.Target.(*btf.Struct); ok {
 						if strct.Name == "sk_buff" {
 							name := fn.Name
-							if kprobeMulti && it.kmod != "" {
+							if Flags.UseKprobeMulti && it.kmod != "" {
 								name = fmt.Sprintf("%s [%s]", name, it.kmod)
 							}
 							funcs[name] = i + 1

@@ -21,7 +21,9 @@ func findNearestSym(ip uint64) string {
 	return ksymAddr2Name[ksymsAddrs[i-1]]
 }
 
-func InitKsyms(outputStack bool) error {
+func InitKsyms() error {
+	outputStack := Flags.OutputStack || len(Flags.KMods) != 0
+
 	file, err := os.Open("/proc/kallsyms")
 	if err != nil {
 		return err
