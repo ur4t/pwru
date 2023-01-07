@@ -97,8 +97,8 @@ func main() {
 	if len(funcs) <= 0 {
 		log.Fatalf("Cannot find a matching kernel function")
 	}
-	addr2name, err := pwru.GetAddrs(funcs, flags.OutputStack || len(flags.KMods) != 0)
-	if err != nil {
+
+	if err := pwru.InitKsyms(funcs, flags.OutputStack || len(flags.KMods) != 0); err != nil {
 		log.Fatalf("Failed to get function addrs: %s", err)
 	}
 
@@ -253,7 +253,7 @@ func main() {
 		file.Close()
 	}
 
-	output, err := pwru.NewOutput(&flags, printSkbMap, printStackMap, addr2name, useKprobeMulti)
+	output, err := pwru.NewOutput(&flags, printSkbMap, printStackMap, useKprobeMulti)
 	if err != nil {
 		log.Fatalf("Failed to create outputer: %s", err)
 	}

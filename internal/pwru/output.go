@@ -23,14 +23,11 @@ type output struct {
 	lastSeenSkb   map[uint64]uint64 // skb addr => last seen TS
 	printSkbMap   *ebpf.Map
 	printStackMap *ebpf.Map
-	addr2name     Addr2Name
 	writer        io.Writer
 	kprobeMulti   bool
 }
 
-func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map,
-	addr2Name Addr2Name, kprobeMulti bool) (*output, error) {
-
+func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map, kprobeMulti bool) (*output, error) {
 	writer := os.Stdout
 
 	if flags.OutputFile != "" {
@@ -46,7 +43,6 @@ func NewOutput(flags *Flags, printSkbMap *ebpf.Map, printStackMap *ebpf.Map,
 		lastSeenSkb:   map[uint64]uint64{},
 		printSkbMap:   printSkbMap,
 		printStackMap: printStackMap,
-		addr2name:     addr2Name,
 		writer:        writer,
 		kprobeMulti:   kprobeMulti,
 	}, nil
@@ -86,13 +82,13 @@ func (o *output) Print(event *Event) {
 		addr = event.Addr
 	}
 	var funcName string
-	if ksym, ok := o.addr2name.Addr2NameMap[addr]; ok {
-		funcName = ksym.name
-	} else if ksym, ok := o.addr2name.Addr2NameMap[addr-4]; runtime.GOARCH == "amd64" && ok {
+	if name, ok := ksymAddr2Name[addr]; ok {
+		funcName = name
+	} else if ksym, ok := ksymAddr2Name[addr-4]; runtime.GOARCH == "amd64" && ok {
 		// Assume that function has ENDBR in its prelude (enabled by CONFIG_X86_KERNEL_IBT).
 		// See https://lore.kernel.org/bpf/20220811091526.172610-5-jolsa@kernel.org/
 		// for more ctx.
-		funcName = ksym.name
+		funcName = ksym
 	} else {
 		funcName = fmt.Sprintf("0x%x", addr)
 	}
@@ -120,7 +116,7 @@ func (o *output) Print(event *Event) {
 		if err := o.printStackMap.Lookup(&id, &stack); err == nil {
 			for _, ip := range stack.IPs {
 				if ip > 0 {
-					fmt.Fprintf(o.writer, "\n%s", o.addr2name.findNearestSym(ip))
+					fmt.Fprintf(o.writer, "\n%s", findNearestSym(ip))
 				}
 			}
 		}
