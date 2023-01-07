@@ -18,43 +18,40 @@ import (
 	"github.com/cilium/pwru/internal/byteorder"
 )
 
-type output struct {
-	lastSeenSkb   map[uint64]uint64 // skb addr => last seen TS
-	printSkbMap   *ebpf.Map
-	printStackMap *ebpf.Map
-	writer        io.Writer
-	kprobeMulti   bool
+var output struct {
+	LastSeenSkb   map[uint64]uint64 // skb addr => last seen TS
+	PrintSkbMap   *ebpf.Map
+	PrintStackMap *ebpf.Map
+	Writer        io.Writer
 }
 
-func NewOutput(printSkbMap *ebpf.Map, printStackMap *ebpf.Map, kprobeMulti bool) (*output, error) {
+func InitOutput(printSkbMap *ebpf.Map, printStackMap *ebpf.Map) error {
 	writer := os.Stdout
 
 	if Flags.OutputFile != "" {
 		file, err := os.Create(Flags.OutputFile)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		writer = file
 	}
 
-	return &output{
-		lastSeenSkb:   map[uint64]uint64{},
-		printSkbMap:   printSkbMap,
-		printStackMap: printStackMap,
-		writer:        writer,
-		kprobeMulti:   kprobeMulti,
-	}, nil
+	output.LastSeenSkb = map[uint64]uint64{}
+	output.PrintSkbMap = printSkbMap
+	output.PrintStackMap = printStackMap
+	output.Writer = writer
+	return nil
 }
 
-func (o *output) PrintHeader() {
-	fmt.Fprintf(o.writer, "%18s %6s %16s %24s", "SKB", "CPU", "PROCESS", "FUNC")
+func PrintHeader() {
+	fmt.Fprintf(output.Writer, "%18s %6s %16s %24s", "SKB", "CPU", "PROCESS", "FUNC")
 	if Flags.OutputTS != "none" {
-		fmt.Fprintf(o.writer, " %16s", "TIMESTAMP")
+		fmt.Fprintf(output.Writer, " %16s", "TIMESTAMP")
 	}
-	fmt.Fprintf(o.writer, "\n")
+	fmt.Fprintf(output.Writer, "\n")
 }
 
-func (o *output) Print(event *Event) {
+func Print(event *Event) {
 	p, err := ps.FindProcess(int(event.PID))
 	execName := "<empty>"
 	if err == nil && p != nil {
@@ -62,7 +59,7 @@ func (o *output) Print(event *Event) {
 	}
 	ts := event.Timestamp
 	if Flags.OutputTS == "relative" {
-		if last, found := o.lastSeenSkb[event.SAddr]; found {
+		if last, found := output.LastSeenSkb[event.SAddr]; found {
 			ts = ts - last
 		} else {
 			ts = 0
@@ -73,7 +70,7 @@ func (o *output) Print(event *Event) {
 	switch runtime.GOARCH {
 	case "amd64":
 		addr = event.Addr
-		if !o.kprobeMulti {
+		if !Flags.UseKprobeMulti {
 			addr -= 1
 		}
 	case "arm64":
@@ -90,19 +87,19 @@ func (o *output) Print(event *Event) {
 	} else {
 		funcName = fmt.Sprintf("0x%x", addr)
 	}
-	fmt.Fprintf(o.writer, "%18s %6s %16s %24s", fmt.Sprintf("0x%x", event.SAddr),
+	fmt.Fprintf(output.Writer, "%18s %6s %16s %24s", fmt.Sprintf("0x%x", event.SAddr),
 		fmt.Sprintf("%d", event.CPU), fmt.Sprintf("[%s]", execName), funcName)
 	if Flags.OutputTS != "none" {
-		fmt.Fprintf(o.writer, " %16d", ts)
+		fmt.Fprintf(output.Writer, " %16d", ts)
 	}
-	o.lastSeenSkb[event.SAddr] = event.Timestamp
+	output.LastSeenSkb[event.SAddr] = event.Timestamp
 
 	if Flags.OutputMeta {
-		fmt.Fprintf(o.writer, " netns=%d mark=0x%x ifindex=%d proto=%x mtu=%d len=%d", event.Meta.Netns, event.Meta.Mark, event.Meta.Ifindex, event.Meta.Proto, event.Meta.MTU, event.Meta.Len)
+		fmt.Fprintf(output.Writer, " netns=%d mark=0x%x ifindex=%d proto=%x mtu=%d len=%d", event.Meta.Netns, event.Meta.Mark, event.Meta.Ifindex, event.Meta.Proto, event.Meta.MTU, event.Meta.Len)
 	}
 
 	if Flags.OutputTuple {
-		fmt.Fprintf(o.writer, " %s:%d->%s:%d(%s)",
+		fmt.Fprintf(output.Writer, " %s:%d->%s:%d(%s)",
 			addrToStr(event.Tuple.L3Proto, event.Tuple.Saddr), byteorder.NetworkToHost16(event.Tuple.Sport),
 			addrToStr(event.Tuple.L3Proto, event.Tuple.Daddr), byteorder.NetworkToHost16(event.Tuple.Dport),
 			protoToStr(event.Tuple.L4Proto))
@@ -111,24 +108,24 @@ func (o *output) Print(event *Event) {
 	if Flags.OutputStack && event.PrintStackId > 0 {
 		var stack StackData
 		id := uint32(event.PrintStackId)
-		if err := o.printStackMap.Lookup(&id, &stack); err == nil {
+		if err := output.PrintStackMap.Lookup(&id, &stack); err == nil {
 			for _, ip := range stack.IPs {
 				if ip > 0 {
-					fmt.Fprintf(o.writer, "\n%s", findNearestSym(ip))
+					fmt.Fprintf(output.Writer, "\n%s", findNearestSym(ip))
 				}
 			}
 		}
-		_ = o.printStackMap.Delete(&id)
+		_ = output.PrintStackMap.Delete(&id)
 	}
 
 	if Flags.OutputSkb {
 		id := uint32(event.PrintSkbId)
-		if str, err := o.printSkbMap.LookupBytes(&id); err == nil {
-			fmt.Fprintf(o.writer, "\n%s", string(str))
+		if str, err := output.PrintSkbMap.LookupBytes(&id); err == nil {
+			fmt.Fprintf(output.Writer, "\n%s", string(str))
 		}
 	}
 
-	fmt.Fprintln(o.writer)
+	fmt.Fprintln(output.Writer)
 }
 
 func protoToStr(proto uint8) string {

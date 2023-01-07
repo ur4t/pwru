@@ -253,11 +253,10 @@ func main() {
 		file.Close()
 	}
 
-	output, err := pwru.NewOutput(printSkbMap, printStackMap, pwru.Flags.UseKprobeMulti)
-	if err != nil {
+	if err := pwru.InitOutput(printSkbMap, printStackMap); err != nil {
 		log.Fatalf("Failed to create outputer: %s", err)
 	}
-	output.PrintHeader()
+	pwru.PrintHeader()
 
 	defer func() {
 		select {
@@ -289,7 +288,7 @@ func main() {
 			continue
 		}
 
-		output.Print(&event)
+		pwru.Print(&event)
 
 		select {
 		case <-ctx.Done():
