@@ -18,7 +18,10 @@ import (
 	"github.com/cilium/ebpf/link"
 )
 
-type Funcs map[string]int
+var funcs = make(map[string]int)
+
+// Currently libbpf only support getting first 5 params
+const maxParamPos = 5
 
 // getAvailableFilterFunctions return list of functions to which it is possible
 // to attach kprobes.
@@ -42,8 +45,7 @@ func getAvailableFilterFunctions() (map[string]struct{}, error) {
 	return availableFuncs, nil
 }
 
-func GetFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool) (Funcs, error) {
-	funcs := Funcs{}
+func InitFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool) error {
 
 	type iterator struct {
 		kmod string
@@ -52,7 +54,7 @@ func GetFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool) 
 
 	reg, err := regexp.Compile(pattern)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compile regular expression %v", err)
+		return fmt.Errorf("failed to compile regular expression %v", err)
 	}
 
 	availableFuncs, err := getAvailableFilterFunctions()
@@ -65,64 +67,70 @@ func GetFuncs(pattern string, spec *btf.Spec, kmods []string, kprobeMulti bool) 
 		path := filepath.Join("/sys/kernel/btf", module)
 		f, err := os.Open(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open %s: %v", path, err)
+			return fmt.Errorf("failed to open %s: %v", path, err)
 		}
 		defer f.Close()
 
 		modSpec, err := btf.LoadSplitSpecFromReader(f, spec)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load %s btf: %v", module, err)
+			return fmt.Errorf("failed to load %s btf: %v", module, err)
 		}
 		iters = append(iters, iterator{module, modSpec.Iterate()})
 	}
 
 	for _, it := range iters {
 		for it.iter.Next() {
-			typ := it.iter.Type
-			fn, ok := typ.(*btf.Func)
+			fn, ok := it.iter.Type.(*btf.Func)
 			if !ok {
 				continue
 			}
 
-			fnName := string(fn.Name)
+			fnName := fn.Name
 
 			if pattern != "" && reg.FindString(fnName) != fnName {
 				continue
 			}
 
-			availableFnName := fnName
 			if it.kmod != "" {
-				availableFnName = fmt.Sprintf("%s [%s]", fnName, it.kmod)
+				fnName = fmt.Sprintf("%s [%s]", fnName, it.kmod)
 			}
-			if _, ok := availableFuncs[availableFnName]; !ok {
+			if _, ok := availableFuncs[fnName]; !ok {
 				continue
 			}
 
-			fnProto := fn.Type.(*btf.FuncProto)
-			i := 1
-			for _, p := range fnProto.Params {
+			for i, p := range fn.Type.(*btf.FuncProto).Params {
+				if i >= maxParamPos {
+					break
+				}
 				if ptr, ok := p.Type.(*btf.Pointer); ok {
 					if strct, ok := ptr.Target.(*btf.Struct); ok {
-						if strct.Name == "sk_buff" && i <= 5 {
-							name := fnName
+						if strct.Name == "sk_buff" {
+							name := fn.Name
 							if kprobeMulti && it.kmod != "" {
-								name = fmt.Sprintf("%s [%s]", fnName, it.kmod)
+								name = fmt.Sprintf("%s [%s]", name, it.kmod)
 							}
-							funcs[name] = i
-							continue
+							funcs[name] = i + 1
+							break // it is assumed that there's only one sk_buff
 						}
 					}
 				}
-				i += 1
 			}
 		}
 	}
 
-	return funcs, nil
+	if len(funcs) == 0 {
+		return fmt.Errorf("no matching kernel function found")
+	}
+
+	return nil
 }
 
-func GetFuncsByPos(funcs Funcs) map[int][]string {
-	ret := make(map[int][]string, len(funcs))
+func GetFuncCount() int {
+	return len(funcs)
+}
+
+func GetFuncsByPos() [][]string {
+	ret := make([][]string, maxParamPos+1)
 	for fn, pos := range funcs {
 		ret[pos] = append(ret[pos], fn)
 	}

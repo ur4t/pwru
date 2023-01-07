@@ -21,7 +21,7 @@ func findNearestSym(ip uint64) string {
 	return ksymAddr2Name[ksymsAddrs[i-1]]
 }
 
-func InitKsyms(funcs Funcs, outputStack bool) error {
+func InitKsyms(outputStack bool) error {
 	file, err := os.Open("/proc/kallsyms")
 	if err != nil {
 		return err
@@ -32,7 +32,7 @@ func InitKsyms(funcs Funcs, outputStack bool) error {
 	for scanner.Scan() {
 		line := strings.Split(scanner.Text(), " ")
 		name := line[2]
-		if outputStack || (funcs[name] > 0) {
+		if _, ok := funcs[name]; outputStack || ok {
 			addr, err := strconv.ParseUint(line[0], 16, 64)
 			if err != nil {
 				return err

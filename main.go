@@ -90,15 +90,11 @@ func main() {
 		useKprobeMulti = true
 	}
 
-	funcs, err := pwru.GetFuncs(flags.FilterFunc, btfSpec, flags.KMods, useKprobeMulti)
-	if err != nil {
+	if err := pwru.InitFuncs(flags.FilterFunc, btfSpec, flags.KMods, useKprobeMulti); err != nil {
 		log.Fatalf("Failed to get skb-accepting functions: %s", err)
 	}
-	if len(funcs) <= 0 {
-		log.Fatalf("Cannot find a matching kernel function")
-	}
 
-	if err := pwru.InitKsyms(funcs, flags.OutputStack || len(flags.KMods) != 0); err != nil {
+	if err := pwru.InitKsyms(flags.OutputStack || len(flags.KMods) != 0); err != nil {
 		log.Fatalf("Failed to get function addrs: %s", err)
 	}
 
@@ -168,11 +164,13 @@ func main() {
 	}
 	log.Printf("Attaching kprobes (via %s)...\n", msg)
 	ignored := 0
-	bar := pb.StartNew(len(funcs))
-	funcsByPos := pwru.GetFuncsByPos(funcs)
+	bar := pb.StartNew(pwru.GetFuncCount())
+	funcsByPos := pwru.GetFuncsByPos()
 	for pos, fns := range funcsByPos {
 		var fn *ebpf.Program
 		switch pos {
+		case 0:
+			continue
 		case 1:
 			fn = kprobe1
 		case 2:
