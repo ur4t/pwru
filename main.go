@@ -17,23 +17,25 @@ import (
 
 	pb "github.com/cheggaaa/pb/v3"
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
-	flag "github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 
 	"github.com/cilium/pwru/internal/pwru"
 )
 
 func main() {
-	pwru.SetFlags()
-	flag.Parse()
+	if err := pwru.InitConfig(); err != nil {
+		log.Fatalf("Failed to initilize configuration: %s", err)
+	}
 
-	if pwru.Flags.ShowVersion {
+	if pwru.Config.ShowVersion {
 		fmt.Printf("pwru %s\n", pwru.Version)
 		os.Exit(0)
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &unix.Rlimit{
 		Cur: 4096,
@@ -48,66 +50,23 @@ func main() {
 		log.Fatalf("Failed to set temporary rlimit: %s", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	var err error
-	if pwru.Flags.KernelBTF != "" {
-		pwru.Flags.BtfSpec, err = btf.LoadSpec(pwru.Flags.KernelBTF)
-	} else {
-		pwru.Flags.BtfSpec, err = btf.LoadKernelSpec()
-	}
-	if err != nil {
-		log.Fatalf("Failed to load BTF spec: %s", err)
-	}
-
-	if pwru.Flags.AllKMods {
-		files, err := os.ReadDir("/sys/kernel/btf")
-		if err != nil {
-			log.Fatalf("Failed to read directory: %s", err)
-		}
-
-		pwru.Flags.KMods = nil
-		for _, file := range files {
-			if !file.IsDir() && file.Name() != "vmlinux" {
-				pwru.Flags.KMods = append(pwru.Flags.KMods, file.Name())
-			}
-		}
-	}
-
-	switch pwru.Flags.Backend {
-	case "":
-	case pwru.BackendKprobe:
-	case pwru.BackendKprobeMulti:
-	default:
-		log.Fatalf("Invalid tracing backend %s", pwru.Flags.Backend)
-	}
-
-	// Until https://lore.kernel.org/bpf/20221025134148.3300700-1-jolsa@kernel.org/
-	// has been backported to the stable, kprobe-multi cannot be used when attaching
-	// to kmods.
-	if pwru.Flags.Backend == "" && len(pwru.Flags.KMods) == 0 {
-		pwru.Flags.UseKprobeMulti = pwru.HaveBPFLinkKprobeMulti()
-	} else if pwru.Flags.Backend == pwru.BackendKprobeMulti {
-		pwru.Flags.UseKprobeMulti = true
-	}
-
 	if err := pwru.InitUtils(); err != nil {
 		log.Fatalf("Failed to initilize utilities: %s", err)
 	}
 
 	var opts ebpf.CollectionOptions
-	opts.Programs.KernelTypes = pwru.Flags.BtfSpec
+	opts.Programs.KernelTypes = pwru.Config.BtfSpec
 
 	var objs pwru.KProbeObjects
+	var err error
 	switch {
-	case pwru.Flags.OutputSkb && pwru.Flags.UseKprobeMulti:
+	case pwru.Config.OutputSkb && pwru.Config.UseKprobeMulti:
 		objs = &KProbeMultiPWRUObjects{}
 		err = LoadKProbeMultiPWRUObjects(objs, &opts)
-	case pwru.Flags.OutputSkb:
+	case pwru.Config.OutputSkb:
 		objs = &KProbePWRUObjects{}
 		err = LoadKProbePWRUObjects(objs, &opts)
-	case pwru.Flags.UseKprobeMulti:
+	case pwru.Config.UseKprobeMulti:
 		objs = &KProbeMultiPWRUWithoutOutputSKBObjects{}
 		err = LoadKProbeMultiPWRUWithoutOutputSKBObjects(objs, &opts)
 	default:
@@ -130,11 +89,11 @@ func main() {
 	events := objs.GetEvents()
 	printStackMap := objs.GetPrintStackMap()
 	var printSkbMap *ebpf.Map
-	if pwru.Flags.OutputSkb {
+	if pwru.Config.OutputSkb {
 		printSkbMap = objs.(pwru.KProbeMapsWithOutputSKB).GetPrintSkbMap()
 	}
 
-	log.Printf("Per cpu buffer size: %d bytes\n", pwru.Flags.PerCPUBuffer)
+	log.Printf("Per cpu buffer size: %d bytes\n", pwru.Config.PerCPUBuffer)
 	pwru.ConfigBPFMap(cfgMap)
 
 	var kprobes []link.Link
@@ -157,7 +116,7 @@ func main() {
 	}()
 
 	msg := "kprobe"
-	if pwru.Flags.UseKprobeMulti {
+	if pwru.Config.UseKprobeMulti {
 		msg = "kprobe-multi"
 	}
 	log.Printf("Attaching kprobes (via %s)...\n", msg)
@@ -184,7 +143,7 @@ func main() {
 			continue
 		}
 
-		if !pwru.Flags.UseKprobeMulti {
+		if !pwru.Config.UseKprobeMulti {
 			for _, name := range fns {
 				select {
 				case <-ctx.Done():
@@ -225,7 +184,7 @@ func main() {
 	bar.Finish()
 	log.Printf("Attached (ignored %d)\n", ignored)
 
-	rd, err := perf.NewReader(events, pwru.Flags.PerCPUBuffer)
+	rd, err := perf.NewReader(events, pwru.Config.PerCPUBuffer)
 	if err != nil {
 		log.Fatalf("Creating perf event reader: %s", err)
 	}
@@ -241,8 +200,8 @@ func main() {
 
 	log.Println("Listening for events..")
 
-	if pwru.Flags.ReadyFile != "" {
-		file, err := os.Create(pwru.Flags.ReadyFile)
+	if pwru.Config.ReadyFile != "" {
+		file, err := os.Create(pwru.Config.ReadyFile)
 		if err != nil {
 			log.Fatalf("Failed to create ready file: %s", err)
 		}
@@ -259,13 +218,13 @@ func main() {
 		case <-ctx.Done():
 			log.Println("Received signal, exiting program..")
 		default:
-			log.Printf("Printed %d events, exiting program..\n", pwru.Flags.OutputLimitLines)
+			log.Printf("Printed %d events, exiting program..\n", pwru.Config.OutputLimitLines)
 		}
 	}()
 
 	var event pwru.Event
-	runForever := pwru.Flags.OutputLimitLines == 0
-	for i := pwru.Flags.OutputLimitLines; i > 0 || runForever; i-- {
+	runForever := pwru.Config.OutputLimitLines == 0
+	for i := pwru.Config.OutputLimitLines; i > 0 || runForever; i-- {
 		record, err := rd.Read()
 		if err != nil {
 			if errors.Is(err, perf.ErrClosed) {

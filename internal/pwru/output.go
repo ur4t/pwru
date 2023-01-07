@@ -28,8 +28,8 @@ var output struct {
 func InitOutput(printSkbMap *ebpf.Map, printStackMap *ebpf.Map) error {
 	writer := os.Stdout
 
-	if Flags.OutputFile != "" {
-		file, err := os.Create(Flags.OutputFile)
+	if Config.OutputFile != "" {
+		file, err := os.Create(Config.OutputFile)
 		if err != nil {
 			return err
 		}
@@ -45,7 +45,7 @@ func InitOutput(printSkbMap *ebpf.Map, printStackMap *ebpf.Map) error {
 
 func PrintHeader() {
 	fmt.Fprintf(output.Writer, "%18s %6s %16s %24s", "SKB", "CPU", "PROCESS", "FUNC")
-	if Flags.OutputTS != "none" {
+	if Config.OutputTS != "none" {
 		fmt.Fprintf(output.Writer, " %16s", "TIMESTAMP")
 	}
 	fmt.Fprintf(output.Writer, "\n")
@@ -58,7 +58,7 @@ func Print(event *Event) {
 		execName = p.Executable()
 	}
 	ts := event.Timestamp
-	if Flags.OutputTS == "relative" {
+	if Config.OutputTS == "relative" {
 		if last, found := output.LastSeenSkb[event.SAddr]; found {
 			ts = ts - last
 		} else {
@@ -70,7 +70,7 @@ func Print(event *Event) {
 	switch runtime.GOARCH {
 	case "amd64":
 		addr = event.Addr
-		if !Flags.UseKprobeMulti {
+		if !Config.UseKprobeMulti {
 			addr -= 1
 		}
 	case "arm64":
@@ -89,23 +89,23 @@ func Print(event *Event) {
 	}
 	fmt.Fprintf(output.Writer, "%18s %6s %16s %24s", fmt.Sprintf("0x%x", event.SAddr),
 		fmt.Sprintf("%d", event.CPU), fmt.Sprintf("[%s]", execName), funcName)
-	if Flags.OutputTS != "none" {
+	if Config.OutputTS != "none" {
 		fmt.Fprintf(output.Writer, " %16d", ts)
 	}
 	output.LastSeenSkb[event.SAddr] = event.Timestamp
 
-	if Flags.OutputMeta {
+	if Config.OutputMeta {
 		fmt.Fprintf(output.Writer, " netns=%d mark=0x%x ifindex=%d proto=%x mtu=%d len=%d", event.Meta.Netns, event.Meta.Mark, event.Meta.Ifindex, event.Meta.Proto, event.Meta.MTU, event.Meta.Len)
 	}
 
-	if Flags.OutputTuple {
+	if Config.OutputTuple {
 		fmt.Fprintf(output.Writer, " %s:%d->%s:%d(%s)",
 			addrToStr(event.Tuple.L3Proto, event.Tuple.Saddr), byteorder.NetworkToHost16(event.Tuple.Sport),
 			addrToStr(event.Tuple.L3Proto, event.Tuple.Daddr), byteorder.NetworkToHost16(event.Tuple.Dport),
 			protoToStr(event.Tuple.L4Proto))
 	}
 
-	if Flags.OutputStack && event.PrintStackId > 0 {
+	if Config.OutputStack && event.PrintStackId > 0 {
 		var stack StackData
 		id := uint32(event.PrintStackId)
 		if err := output.PrintStackMap.Lookup(&id, &stack); err == nil {
@@ -118,7 +118,7 @@ func Print(event *Event) {
 		_ = output.PrintStackMap.Delete(&id)
 	}
 
-	if Flags.OutputSkb {
+	if Config.OutputSkb {
 		id := uint32(event.PrintSkbId)
 		if str, err := output.PrintSkbMap.LookupBytes(&id); err == nil {
 			fmt.Fprintf(output.Writer, "\n%s", string(str))

@@ -71,7 +71,7 @@ func InitUtils() error {
 	utils.Funcs = make(map[string]int)
 	utils.KsymAddr2Name = make(map[uint64]string)
 
-	reg, err := regexp.Compile(Flags.FilterFunc)
+	reg, err := regexp.Compile(Config.FilterFunc)
 	if err != nil {
 		return fmt.Errorf("failed to compile regular expression %v", err)
 	}
@@ -81,8 +81,8 @@ func InitUtils() error {
 		log.Printf("Failed to retrieve available ftrace functions (is /sys/kernel/debug/tracing mounted?): %s", err)
 	}
 
-	iters := []iterator{{"", Flags.BtfSpec.Iterate()}}
-	for _, module := range Flags.KMods {
+	iters := []iterator{{"", Config.BtfSpec.Iterate()}}
+	for _, module := range Config.KMods {
 		path := filepath.Join("/sys/kernel/btf", module)
 		f, err := os.Open(path)
 		if err != nil {
@@ -90,7 +90,7 @@ func InitUtils() error {
 		}
 		defer f.Close()
 
-		modSpec, err := btf.LoadSplitSpecFromReader(f, Flags.BtfSpec)
+		modSpec, err := btf.LoadSplitSpecFromReader(f, Config.BtfSpec)
 		if err != nil {
 			return fmt.Errorf("failed to load %s btf: %v", module, err)
 		}
@@ -106,7 +106,7 @@ func InitUtils() error {
 
 			fnName := fn.Name
 
-			if Flags.FilterFunc != "" && reg.FindString(fnName) != fnName {
+			if Config.FilterFunc != "" && reg.FindString(fnName) != fnName {
 				continue
 			}
 
@@ -125,7 +125,7 @@ func InitUtils() error {
 					if strct, ok := ptr.Target.(*btf.Struct); ok {
 						if strct.Name == "sk_buff" {
 							name := fn.Name
-							if Flags.UseKprobeMulti && it.kmod != "" {
+							if Config.UseKprobeMulti && it.kmod != "" {
 								name = fmt.Sprintf("%s [%s]", name, it.kmod)
 							}
 							utils.Funcs[name] = i + 1
@@ -141,7 +141,7 @@ func InitUtils() error {
 		return fmt.Errorf("no matching kernel function found")
 	}
 
-	outputStack := Flags.OutputStack || len(Flags.KMods) != 0
+	outputStack := Config.OutputStack || len(Config.KMods) != 0
 
 	file, err := os.Open("/proc/kallsyms")
 	if err != nil {
