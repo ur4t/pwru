@@ -11,6 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
@@ -18,10 +21,24 @@ import (
 	"github.com/cilium/ebpf/link"
 )
 
-var funcs = make(map[string]int)
-
 // Currently libbpf only support getting first 5 params
 const maxParamPos = 5
+
+var utils struct {
+	Funcs         map[string]int
+	KsymAddr2Name map[uint64]string
+	KsymsAddrs    []uint64
+}
+
+func findNearestSym(ip uint64) string {
+	i := sort.Search(len(utils.KsymsAddrs), func(i int) bool {
+		return utils.KsymsAddrs[i] > ip
+	})
+	if i == 0 {
+		i += 1
+	}
+	return utils.KsymAddr2Name[utils.KsymsAddrs[i-1]]
+}
 
 // getAvailableFilterFunctions return list of functions to which it is possible
 // to attach kprobes.
@@ -45,11 +62,14 @@ func getAvailableFilterFunctions() (map[string]struct{}, error) {
 	return availableFuncs, nil
 }
 
-func InitFuncs() error {
+func InitUtils() error {
 	type iterator struct {
 		kmod string
 		iter *btf.TypesIterator
 	}
+
+	utils.Funcs = make(map[string]int)
+	utils.KsymAddr2Name = make(map[uint64]string)
 
 	reg, err := regexp.Compile(Flags.FilterFunc)
 	if err != nil {
@@ -108,7 +128,7 @@ func InitFuncs() error {
 							if Flags.UseKprobeMulti && it.kmod != "" {
 								name = fmt.Sprintf("%s [%s]", name, it.kmod)
 							}
-							funcs[name] = i + 1
+							utils.Funcs[name] = i + 1
 							break // it is assumed that there's only one sk_buff
 						}
 					}
@@ -117,20 +137,53 @@ func InitFuncs() error {
 		}
 	}
 
-	if len(funcs) == 0 {
+	if len(utils.Funcs) == 0 {
 		return fmt.Errorf("no matching kernel function found")
+	}
+
+	outputStack := Flags.OutputStack || len(Flags.KMods) != 0
+
+	file, err := os.Open("/proc/kallsyms")
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.Split(scanner.Text(), " ")
+		name := line[2]
+		if _, ok := utils.Funcs[name]; outputStack || ok {
+			addr, err := strconv.ParseUint(line[0], 16, 64)
+			if err != nil {
+				return err
+			}
+			utils.KsymAddr2Name[addr] = name
+			if outputStack {
+				utils.KsymsAddrs = append(utils.KsymsAddrs, addr)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	if outputStack {
+		sort.Slice(utils.KsymsAddrs, func(i, j int) bool {
+			return utils.KsymsAddrs[i] < utils.KsymsAddrs[j]
+		})
 	}
 
 	return nil
 }
 
 func GetFuncCount() int {
-	return len(funcs)
+	return len(utils.Funcs)
 }
 
-func GetFuncsByPos() [][]string {
+func GetClassifiedFuncs() [][]string {
 	ret := make([][]string, maxParamPos+1)
-	for fn, pos := range funcs {
+	for fn, pos := range utils.Funcs {
 		ret[pos] = append(ret[pos], fn)
 	}
 	return ret

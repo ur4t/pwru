@@ -77,9 +77,9 @@ func Print(event *Event) {
 		addr = event.Addr
 	}
 	var funcName string
-	if name, ok := ksymAddr2Name[addr]; ok {
+	if name, ok := utils.KsymAddr2Name[addr]; ok {
 		funcName = name
-	} else if ksym, ok := ksymAddr2Name[addr-4]; runtime.GOARCH == "amd64" && ok {
+	} else if ksym, ok := utils.KsymAddr2Name[addr-4]; runtime.GOARCH == "amd64" && ok {
 		// Assume that function has ENDBR in its prelude (enabled by CONFIG_X86_KERNEL_IBT).
 		// See https://lore.kernel.org/bpf/20220811091526.172610-5-jolsa@kernel.org/
 		// for more ctx.

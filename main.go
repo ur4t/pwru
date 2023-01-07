@@ -92,12 +92,8 @@ func main() {
 		pwru.Flags.UseKprobeMulti = true
 	}
 
-	if err := pwru.InitFuncs(); err != nil {
-		log.Fatalf("Failed to get skb-accepting functions: %s", err)
-	}
-
-	if err := pwru.InitKsyms(); err != nil {
-		log.Fatalf("Failed to get function addrs: %s", err)
+	if err := pwru.InitUtils(); err != nil {
+		log.Fatalf("Failed to initilize utilities: %s", err)
 	}
 
 	var opts ebpf.CollectionOptions
@@ -167,7 +163,7 @@ func main() {
 	log.Printf("Attaching kprobes (via %s)...\n", msg)
 	ignored := 0
 	bar := pb.StartNew(pwru.GetFuncCount())
-	funcsByPos := pwru.GetFuncsByPos()
+	funcsByPos := pwru.GetClassifiedFuncs()
 	for pos, fns := range funcsByPos {
 		var fn *ebpf.Program
 		switch pos {
@@ -254,7 +250,7 @@ func main() {
 	}
 
 	if err := pwru.InitOutput(printSkbMap, printStackMap); err != nil {
-		log.Fatalf("Failed to create outputer: %s", err)
+		log.Fatalf("Failed to initilize output writer: %s", err)
 	}
 	pwru.PrintHeader()
 
